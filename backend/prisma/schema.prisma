@@ -1,3 +1,7 @@
+// schema.prisma
+// PostgreSQL + Prisma schema for a Phantom-auth, persona-based massive survey system
+// with client-side encryption (DEK wrapped by KEK derived from wallet signature).
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,9 +11,429 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTI_CHOICE
+  SHORT_TEXT
+  LONG_TEXT
+  NUMBER
+  DECIMAL
+  DATE
+  DATETIME
+  BOOLEAN
+  SCALE        // Likert or 1..N scales
+}
+
+enum SurveyStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+enum EligibilityOperator {
+  EQ
+  NEQ
+  GT
+  GTE
+  LT
+  LTE
+  IN
+  NOT_IN
+  EXISTS
+  NOT_EXISTS
+  CONTAINS
+  NOT_CONTAINS
+  BETWEEN
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  STARTED
+  COMPLETED
+  REJECTED
+  EXPIRED
+}
 
 model User {
-  id    Int     @id @default(autoincrement())
-  email String  @unique
-  name  String?
+  id               Int       @id @default(autoincrement())
+  walletAddress    String    @unique
+  generatedUserId  String    @default(uuid()) @unique
+  sessionToken     String?
+  dateLogged       DateTime  @default(now())
+  // defaults to 10 days after login (db-level)
+  dateExpire       DateTime  @default(dbgenerated("now() + interval '10 days'"))
+
+  // Phantom/Wallet metadata (public, non-sensitive)
+  walletPublicKey  String?   // base58 ed25519 public key
+  walletProvider   String?   // e.g., "phantom"
+  walletLabel      String?   // optional user label
+
+  // KMS / Encryption metadata (non-decrypting without user consent)
+  // DEK (data encryption key) is generated client-side; we store it wrapped (encrypted) with a KEK
+  // derived from a wallet signature via HKDF (done client-side).
+  encryptedDEK     Json?     // { alg, ct, iv, tag, v } or your chosen envelope
+  dekWrapInfo      Json?     // { kekAlg, kekSalt, kdf: { name, params }, createdAt } (no secrets)
+  // When the user authorizes decryption again, client re-derives KEK from a fresh signature and unwraps DEK.
+
+  // Persona record (encrypted PII)
+  persona          Persona?
+
+  // Derived hashed traits for matching (non-PII, salted hashes)
+  traits           UserTrait[]
+
+  // Owned/related resources (back-relations)
+  ownedOrgs        Org[]
+  payouts          Payout[]
+  auditLogs        AuditLog[]
+  keyWraps         UserKeyWrap[]
+  consents         Consent[]
+  walletAuths      WalletAuth[]
+  encryptedBlobs   EncryptedBlob[]
+
+  // Survey interactions
+  assignments      SurveyAssignment[]
+  answers          Answer[]
+
+  createdAt        DateTime  @default(now())
+  // Add a default to allow adding this required column to existing rows during migration.
+  updatedAt        DateTime  @updatedAt @default(now())
+
+  @@map("users")
+  @@index([walletAddress])
+}
+
+// Encrypted persona (single row per user). All sensitive fields are envelopes (Json).
+model Persona {
+  id          BigInt   @id @default(autoincrement())
+  userId      Int      @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Typical PII — all encrypted client-side with user's DEK
+  // Structure recommendation: { alg, ct, iv, tag, aad?, v }
+  firstName   Json?
+  lastName    Json?
+  email       Json?
+  phone       Json?
+  dob         Json?     // date of birth
+  address     Json?     // structured address or freeform
+  country     Json?
+  region      Json?
+  city        Json?
+  postalCode  Json?
+
+  // Additional demographics (all encrypted)
+  gender      Json?
+  ethnicity   Json?
+  education   Json?
+  income      Json?
+  employment  Json?
+  interests   Json?     // array or tags, encrypted
+
+  // Raw progressive profile facts (encrypted sets)
+  // Keep as a generic JSON blob to store arbitrary key/values captured from surveys.
+  profileFacts Json?    // encrypted: { k: v } map
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("personas")
+}
+
+// Non-sensitive, salted/hashed traits for matching (no PII plaintext).
+// Example: ("age_range" -> "25_34"), ("market" -> "auto_intender") => store salted hash of "key:value".
+model UserTrait {
+  id          BigInt    @id @default(autoincrement())
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  key         String    // e.g., "age_range", "region", "interest"
+  // hashedValue stores salted hash of "key:value". Never store raw value here.
+  hashedValue String    // base64/hex of HMAC/Argon2id/etc over key+value+salt
+  salt        String    // per-user or per-trait salt (non-secret but unique)
+  // Optional for ranges/binning without leaking raw values
+  bucket      String?   // e.g., "25_34", "AZ", "HHI_50_75"
+
+  source      String?   // "persona" | "survey:<surveyId>" | "import"
+  createdAt   DateTime  @default(now())
+
+  @@map("user_traits")
+  @@index([userId, key])
+  @@index([key, hashedValue])
+}
+
+// Organizations/creators who publish surveys.
+model Org {
+  id          BigInt    @id @default(autoincrement())
+  name        String
+  ownerId     Int?      // optional link to a user who manages the org
+  owner       User?     @relation(fields: [ownerId], references: [id])
+
+  billingInfo Json?     // optional encrypted or tokenized billing data (avoid plaintext)
+
+  surveys     Survey[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("orgs")
+  @@index([ownerId])
+}
+
+// A survey authored by an Org (or a solo creator).
+model Survey {
+  id            BigInt        @id @default(autoincrement())
+  orgId         BigInt?
+  org           Org?          @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  title         String
+  description   String?
+  status        SurveyStatus  @default(DRAFT)
+
+  // Targeting & eligibility rules (non-sensitive, not raw PII):
+  // Rules are evaluated against hashed traits (UserTrait) and optionally client-side (with user's consent) on encrypted data.
+  // Example JSON: [{"key":"age_range","op":"IN","values":["25_34","35_44"]}]
+  eligibility   Json?         // array of rule objects (see Eligibility model for normalized form)
+
+  // Optional normalized eligibility rows (AND-of-clauses; clauses may be OR lists)
+  rules         Eligibility[]
+
+  // Quotas / limits
+  desiredResponses Int?
+  maxPerUser       Int?       @default(1)
+  endAt            DateTime?
+
+  // Question group
+  questions     Question[]
+  answers       Answer[]
+
+  // Assignments and responses
+  assignments   SurveyAssignment[]
+  payouts       Payout[]
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@map("surveys")
+  @@index([status])
+  @@index([orgId])
+}
+
+model Eligibility {
+  id        BigInt   @id @default(autoincrement())
+  surveyId  BigInt
+  survey    Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  // Match against UserTrait.key with operator and (hashed) values
+  key       String
+  operator  EligibilityOperator
+  // For EQ/IN-style, store array of hashed trait values or buckets (never raw PII).
+  // Use plain String[] for Postgres text[]; avoid invalid native type annotation.
+  values    String[] // hashed candidate values or bucket labels
+
+  // Optional clause grouping for complex logic; same group means OR within, different groups AND across
+  clauseId  Int?     // e.g., 1, 2, 3 ...
+
+  @@map("eligibility")
+  @@index([surveyId, key])
+}
+
+model Question {
+  id          BigInt       @id @default(autoincrement())
+  surveyId    BigInt
+  survey      Survey       @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  order       Int
+  title       String
+  helpText    String?
+  type        QuestionType
+  required    Boolean      @default(true)
+
+  // For validations (e.g., min/max for NUMBER, LENGTH for text, scale bounds, regex, etc.)
+  validation  Json?
+
+  // For SINGLE/MULTI choice
+  options     Option[]
+
+  // back-relation: answers for this question
+  answers     Answer[]
+
+  // For branching/skip logic
+  logic       Json?        // e.g., rules referencing previous answers
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@map("questions")
+  @@index([surveyId, order])
+}
+
+model Option {
+  id         BigInt    @id @default(autoincrement())
+  questionId BigInt
+  question   Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  order      Int
+  label      String
+  value      String    // stable value key
+
+  @@map("options")
+  @@index([questionId, order])
+}
+
+model SurveyAssignment {
+  id         BigInt           @id @default(autoincrement())
+  surveyId   BigInt
+  survey     Survey           @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  userId     Int
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status     AssignmentStatus @default(ASSIGNED)
+  expiresAt  DateTime?
+  startedAt  DateTime?
+  completedAt DateTime?
+
+  // Snapshot of eligibility evaluation (for audit/debug; non-PII)
+  eligibilitySnapshot Json?
+
+  // back-relation: answers submitted under this assignment
+  answers    Answer[]
+
+  @@map("survey_assignments")
+  @@unique([surveyId, userId])
+  @@index([userId, status])
+}
+
+model Answer {
+  id          BigInt     @id @default(autoincrement())
+  assignmentId BigInt
+  assignment   SurveyAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  surveyId    BigInt
+  survey      Survey    @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  questionId  BigInt
+  question    Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  // Encrypted answer payload (client-side): supports any type.
+  // For choice questions, store selected option values in the ciphertext.
+  value       Json       // encrypted envelope
+
+  // Whether this answer should promote a derived trait (client decides what to promote).
+  // The promotion itself writes to UserTrait with salted hashes (no PII).
+  promoted    Boolean    @default(false)
+
+  createdAt   DateTime   @default(now())
+
+  @@map("answers")
+  @@index([userId, surveyId])
+  @@index([surveyId, questionId])
+  @@unique([assignmentId, questionId])
+}
+
+model Payout {
+  id         BigInt   @id @default(autoincrement())
+  surveyId   BigInt
+  survey     Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amountCents Int
+  currency   String   @default("USD")
+  status     String   @default("pending") // or enum if you prefer
+  // Payment rails metadata (tokenized, non-PII ideally)
+  meta       Json?
+
+  createdAt  DateTime  @default(now())
+
+  @@map("payouts")
+  @@index([surveyId])
+  @@index([userId])
+}
+
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  actorUserId Int?
+  actor       User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  action      String   // e.g., "LOGIN", "ASSIGN_SURVEY", "SUBMIT_ANSWER", "DECRYPT_REQUEST"
+  targetType  String?  // e.g., "Survey", "Answer", "Persona"
+  targetId    String?  // store as string for flexibility
+  ip          String?
+  userAgent   String?
+
+  // IMPORTANT: never store decrypted content here.
+  details     Json?    // non-sensitive metadata only
+
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+  @@index([actorUserId, action])
+}
+
+// ==== Additional models for key-wrap, consent, wallet sessions, and generic encrypted blobs ====
+model UserKeyWrap {
+  id            BigInt   @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Wrapped DEK or other wrapped keys as an envelope (e.g. JWE-like JSON)
+  wrappedKey    Json     // { alg, ct, iv, tag, v }
+  wrapMeta      Json?    // { kdf: "HKDF-SHA256", salt: "...", version: 1, purpose: "persona" }
+  purpose       String   // e.g., "persona", "files", "answers"
+  createdAt     DateTime @default(now())
+  rotatedAt     DateTime?
+
+  @@map("user_key_wraps")
+  @@index([userId, purpose])
+}
+
+model Consent {
+  id            BigInt   @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  scope         String   // e.g., "MATCHING", "DECRYPT_FOR_ORG", "RESEARCH"
+  granted       Boolean
+  grantedAt     DateTime?
+  revokedAt     DateTime?
+  meta          Json?
+
+  @@map("consents")
+  @@index([userId, scope])
+}
+
+model WalletAuth {
+  id            BigInt   @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  walletAddress String
+  provider      String?  // e.g., "phantom"
+  lastSignedAt  DateTime?
+  lastNonce     String?
+  createdAt     DateTime @default(now())
+
+  @@map("wallet_auths")
+  @@index([userId])
+  @@index([walletAddress])
+}
+
+model EncryptedBlob {
+  id            BigInt   @id @default(autoincrement())
+  ownerUserId   Int
+  owner         User     @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  kind          String   // e.g., "persona", "file", "response_attachment"
+  envelope      Json     // { alg, ct, iv, tag, v }
+  meta          Json?
+  createdAt     DateTime @default(now())
+
+  @@map("encrypted_blobs")
+  @@index([ownerUserId, kind])
 }

@@ -1,0 +1,42 @@
+WalletSignMessageError: You cannot sign solana transactions using sign message
+    at StandardWalletAdapter._StandardWalletAdapter_signMessage2 [as signMessage] (chunk-C6UGBFST.js?v=8b47e7e4:6748:13)
+    at async chunk-C6UGBFST.js?v=8b47e7e4:7236:12
+    at async onConnect (Login.jsx:81:22) StandardWalletAdapter {_events: Events, _eventsCount: 4, signIn: ƒ, signTransaction: ƒ, signAllTransactions: ƒ, …}
+(anonymous) @ chunk-C6UGBFST.js?v=8b47e7e4:7120
+handleError @ chunk-C6UGBFST.js?v=8b47e7e4:7181
+emit @ chunk-ZHBCZL5G.js?v=8b47e7e4:81
+_StandardWalletAdapter_signMessage2 @ chunk-C6UGBFST.js?v=8b47e7e4:6751
+await in _StandardWalletAdapter_signMessage2
+(anonymous) @ chunk-C6UGBFST.js?v=8b47e7e4:7236
+onConnect @ Login.jsx:81
+await in onConnect
+(anonymous) @ Login.jsx:135
+commitHookEffectListMount @ chunk-WRD5HZVH.js?v=8b47e7e4:16915
+commitPassiveMountOnFiber @ chunk-WRD5HZVH.js?v=8b47e7e4:18156
+commitPassiveMountEffects_complete @ chunk-WRD5HZVH.js?v=8b47e7e4:18129
+commitPassiveMountEffects_begin @ chunk-WRD5HZVH.js?v=8b47e7e4:18119
+commitPassiveMountEffects @ chunk-WRD5HZVH.js?v=8b47e7e4:18109
+flushPassiveEffectsImpl @ chunk-WRD5HZVH.js?v=8b47e7e4:19490
+flushPassiveEffects @ chunk-WRD5HZVH.js?v=8b47e7e4:19447
+(anonymous) @ chunk-WRD5HZVH.js?v=8b47e7e4:19328
+workLoop @ chunk-WRD5HZVH.js?v=8b47e7e4:197
+flushWork @ chunk-WRD5HZVH.js?v=8b47e7e4:176
+performWorkUntilDeadline @ chunk-WRD5HZVH.js?v=8b47e7e4:384Understand this error
+Login.jsx:131 signMessage failed Ue: You cannot sign solana transactions using sign message
+    at #n (solana.js:13:42903)
+    at async r.signMessage (solana.js:13:45738)
+    at async onConnect (Login.jsx:87:24)
+onConnect @ Login.jsx:131
+await in onConnect
+(anonymous) @ Login.jsx:135
+commitHookEffectListMount @ chunk-WRD5HZVH.js?v=8b47e7e4:16915
+commitPassiveMountOnFiber @ chunk-WRD5HZVH.js?v=8b47e7e4:18156
+commitPassiveMountEffects_complete @ chunk-WRD5HZVH.js?v=8b47e7e4:18129
+commitPassiveMountEffects_begin @ chunk-WRD5HZVH.js?v=8b47e7e4:18119
+commitPassiveMountEffects @ chunk-WRD5HZVH.js?v=8b47e7e4:18109
+flushPassiveEffectsImpl @ chunk-WRD5HZVH.js?v=8b47e7e4:19490
+flushPassiveEffects @ chunk-WRD5HZVH.js?v=8b47e7e4:19447
+(anonymous) @ chunk-WRD5HZVH.js?v=8b47e7e4:19328
+workLoop @ chunk-WRD5HZVH.js?v=8b47e7e4:197
+flushWork @ chunk-WRD5HZVH.js?v=8b47e7e4:176
+performWorkUntilDeadline @ chunk-WRD5HZVH.js?v=8b47e7e4:384Understand this error
