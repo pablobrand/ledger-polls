@@ -1,21 +1,21 @@
-version: '3.8'
 services:
   frontend:
     volumes:
       - ./frontend:/app
+      - /app/node_modules
     ports:
       - "3000:3000"
     environment:
       - CHOKIDAR_USEPOLLING=true
+      - BACKEND_URL=http://backend:4000
     command: ["npm", "run", "dev"]
 
   backend:
     volumes:
       - ./backend:/app
+      - /app/node_modules
     ports:
       - "4000:4000"
     environment:
       - NODE_ENV=development
-    # Run npm install on container start (ensures devDependencies like nodemon are present
-    # when using a bind-mounted backend folder) then start the dev server.
-    command: ["sh", "-c", "npm install --no-audit --no-fund && npm run dev"]
+    command: ["npm", "run", "dev"]

@@ -1,238 +1,397 @@
+# Ledger Polls
 
-docker-compose up -d --build
-docker-compose exec backend npx prisma migrate deploy
-docker-compose build backend
-docker-compose up -d backend
-docker exec -it $container sh -c "cd /app && npx prisma generate"
-docker exec -it $container sh -c "cd /app && npx prisma migrate dev --name apply_changes"
-docker-compose build backend
-docker-compose up -d backend
-docker-compose build backend
-docker-compose up -d backend
-docker exec -it ledger-polls-backend-1 sh -c "cd /app && npx prisma migrate dev --name init --preview-feature"
-docker-compose down
-docker volume rm ledger-polls_db_data
-docker-compose up -d --build
-docker exec -t ledger-polls-db-1 pg_dumpall -c -U postgres > C:\path\to\backup.sql
-docker exec -t ledger-polls-db-1 pg_dumpall -c -U postgres > ./backup.sql
-docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"
-# Ledger Polls — Full-stack (React + Vite, Express + Prisma, Postgres)
+Ledger Polls is a full-stack demo app for Solana wallet login and client-side encrypted persona storage.
 
-This repository contains a small full-stack app used to demo wallet-based login (Phantom / Solana).
+Current MVP scope:
+- Wallet login with Phantom-compatible Solana wallets
+- Backend-issued nonce challenge and signature verification
+- Bearer-token session handling
+- Client-side persona encryption before upload
+- Encrypted persona envelope storage in Postgres
 
-High level:
-- Frontend: React 18 + Vite (dev server / build), Solana wallet adapters (Phantom)
-- Backend: Node.js (ESM) + Express + Prisma (Postgres)
-- Database: PostgreSQL (Docker)
-- Orchestration: Docker & docker-compose for local full-stack runs
+This repo is not feature-complete yet. The database schema already includes models for surveys, assignments, answers, payouts, and audit logging, but the current app mainly covers auth and persona onboarding.
 
-## Prerequisites
-- Docker Desktop (recommended for full-stack) or Docker Engine + docker-compose
-- Node.js (>=18) and npm when running services locally without Docker
+## Stack
+
+- Frontend: React 18 + Vite + Solana wallet adapters
+- Backend: Node.js + Express + Prisma
+- Database: PostgreSQL
+- Local orchestration: Docker Compose
+
+## What is implemented today
+
+### Backend
+- `POST /api/auth/login` issues a nonce for a wallet address with explicit auth mode (`signup` or `signin`)
+- `POST /api/auth/verify` verifies the wallet signature and returns a session token
+- `GET /api/user/me` returns the authenticated user summary plus persona/consent status
+- `GET /api/user/persona` returns the latest encrypted persona envelope and wrapped DEK metadata
+- `POST /api/user/persona` stores an encrypted persona envelope and wrapped DEK
+- `GET /api/audience/summary` returns audience totals/distributions (authenticated)
+- `GET /api/public/audience/summary` returns audience totals/distributions (public aggregate fallback)
+
+### Frontend
+- Wallet connect and sign-in flow
+- Simple welcome screen after login
+- Persona form that encrypts data client-side before upload
 
 ## Project layout
 
-```
+```text
 ledger-polls/
-	backend/        # Express API, Prisma schema, migrations
-	frontend/       # React + Vite app
-	docker-compose.yml
+├─ backend/                 # Express API, Prisma schema, migrations
+├─ frontend/                # React + Vite app
+├─ docker-compose.yml
+├─ docker-compose.override.yml
+└─ README.md
 ```
 
----
+## Prerequisites
 
-## Quick start — (Docker) — Recommended
+- Docker Desktop or Docker Engine with Compose
+- Node.js 18+ and npm for local development without Docker
+- A Solana wallet that supports message signing
 
-From project root (PowerShell):
+## Quick start with Docker
+
+From the repo root:
 
 ```powershell
-docker-compose down
-docker-compose up -d --build
+docker compose down
+docker compose up -d --build
 ```
 
-What this does:
-- Starts Postgres (port 5432), backend (port 4000), and frontend (port 3000)
-- Backend image runs `npx prisma generate` during build so Prisma client is available
+```bash
+docker compose down
+docker compose up -d --build
+```
 
-Validate services:
+This starts:
+- Postgres on `5432`
+- Backend API on `4000`
+- Frontend Vite app on `3000`
+
+Open the app at `http://localhost:3000`.
+
+### Useful Docker checks
 
 ```powershell
 docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"
-docker-compose logs -f backend
+docker compose logs -f backend
 ```
 
-Apply migrations (if needed) from host:
+```bash
+docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"
+docker compose logs -f backend
+```
+
+### Prisma commands from the host
+
+Generate Prisma client and apply existing migrations:
 
 ```powershell
-docker-compose exec backend sh -c "cd /app && npx prisma generate && npx prisma migrate deploy"
+docker compose exec backend sh -c "cd /app && npx prisma generate && npx prisma migrate deploy"
 ```
 
-Interactive migration (creates migration files):
+```bash
+docker compose exec backend sh -c "cd /app && npx prisma generate && npx prisma migrate deploy"
+```
+
+Create a new local migration:
 
 ```powershell
-docker-compose exec backend sh -c "cd /app && npx prisma migrate dev --name init"
+docker compose exec backend sh -c "cd /app && npx prisma migrate dev --name init"
 ```
 
-Access the app:
+```bash
+docker compose exec backend sh -c "cd /app && npx prisma migrate dev --name init"
+```
+
+### After migrations: run and verify Docker services
+
+Start or restart all services:
+
+```powershell
+docker compose up -d --build
+```
+
+```bash
+docker compose up -d --build
+```
+
+Check service status (look for `Up` on `db`, `backend`, and `frontend`):
+
+```powershell
+docker compose ps
+```
+
+```bash
+docker compose ps
+```
+
+Check running ports:
+
+```powershell
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+If frontend is not visible, check frontend logs:
+
+```powershell
+docker compose logs --tail 100 frontend
+```
+
+```bash
+docker compose logs --tail 100 frontend
+```
+
+## Seed test personas
+
+The repo includes a Prisma seed script that creates 20 synthetic persona profiles for testing.
+
+What the seed does:
+- Removes prior synthetic users with wallet prefix `seed_wallet_` (idempotent reruns)
+- Creates 20 synthetic users
+- Creates persona records in both:
+  - `encrypted_blobs` (`kind='persona'`) for current audience analytics path
+  - `personas` table for direct SQL inspection
+
+Run seed in Docker:
+
+```powershell
+docker compose exec backend npm run seed
+```
+
+```bash
+docker compose exec backend npm run seed
+```
+
+Quick checks:
+
+```powershell
+docker compose exec db psql -U postgres -d postgres -c "select count(*) as personas_count from personas;"
+docker compose exec db psql -U postgres -d postgres -c "select count(*) as blobs_count from encrypted_blobs where kind='persona';"
+```
+
+```bash
+docker compose exec db psql -U postgres -d postgres -c "select count(*) as personas_count from personas;"
+docker compose exec db psql -U postgres -d postgres -c "select count(*) as blobs_count from encrypted_blobs where kind='persona';"
+```
+
+Quick health checks:
+
+```powershell
+Invoke-RestMethod http://localhost:4000/
+```
+
+```bash
+curl http://localhost:4000/
+```
+
+Open app URLs:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:4000
 
-Notes:
-- The frontend dev server (Vite) is configured to proxy `/api` to the backend. In Docker this resolves to `http://backend:4000`. When running frontend on host, set `BACKEND_URL=http://localhost:4000` before `npm run dev` so Vite proxies correctly.
+## Local development without Docker
 
----
-
-## Local development (without Docker)
-
-Backend (in one terminal):
+### Backend
 
 ```powershell
 cd backend
 npm install
 npx prisma generate
-# run migrations if necessary
 npx prisma migrate dev --name init
 npm run dev
 ```
 
-Frontend (in another terminal):
+```bash
+cd backend
+npm install
+npx prisma generate
+npx prisma migrate dev --name init
+npm run dev
+```
+
+The backend runs on `http://localhost:4000`.
+
+### Frontend
+
+Default Vite port is `3000`.
 
 ```powershell
 cd frontend
-# tell Vite where to proxy /api to (your local backend)
 $env:BACKEND_URL='http://localhost:4000'
-npm run dev -- --port 3001
-
+npm install
+npm run dev
 ```
+
 ```bash
 cd frontend
-BACKEND_URL='http://localhost:4000' 
-npm run dev -- --port 3001
+export BACKEND_URL='http://localhost:4000'
+npm install
+npm run dev
 ```
-Open: http://localhost:3000
 
----
-
-## Useful quick validation commands
-
-Test backend root:
+If port `3000` is already in use, run Vite on another port:
 
 ```powershell
-curl http://localhost:4000/
-# or PowerShell:
+npm run dev -- --port 3001
+```
+
+```bash
+npm run dev -- --port 3001
+```
+
+If you do that, open `http://localhost:3001`.
+
+## How the current auth flow works
+
+1. The frontend requests a nonce from `POST /api/auth/login` with `authMode` set to `signup` or `signin`
+2. The wallet signs the nonce
+3. The frontend sends the signature and exact nonce to `POST /api/auth/verify`
+4. The backend returns a `sessionToken`
+5. The frontend uses `Authorization: Bearer <sessionToken>` for protected requests
+
+Notes:
+- `signin` requires the wallet to already be registered
+- nonce verification is bound to the exact challenge to prevent mismatch/race issues
+
+## How persona storage works today
+
+- Persona data is encrypted in the browser
+- A DEK is generated client-side
+- A KEK is derived from a wallet signature
+- The DEK is wrapped client-side
+- The backend stores:
+  - the encrypted persona envelope
+  - the wrapped DEK
+  - non-secret metadata
+
+For the current MVP, encrypted persona data is stored through `EncryptedBlob` and used by audience analytics. The `Persona` model is also populated by seed data for SQL-level validation and future migration alignment.
+
+## Audience analytics endpoints
+
+The Welcome page analytics use persona profile metadata snapshots and supports filters:
+- `educationLevel`
+- `minAge` / `maxAge`
+- `country`, `state`, `city`
+- `sex`
+
+Authenticated endpoint:
+- `GET /api/audience/summary`
+
+Public aggregate fallback endpoint:
+- `GET /api/public/audience/summary`
+
+Example query:
+
+```bash
+curl "http://localhost:4000/api/public/audience/summary?educationLevel=Bachelor%27s%20degree&minAge=30&maxAge=45&country=United%20States"
+```
+
+## Environment variables
+
+### Backend
+- `DATABASE_URL`: Postgres connection string
+- `PORT`: backend port, defaults to `4000`
+- `BACKEND_CORS_ORIGIN`: optional allowed origin for CORS; defaults to `*` in development
+- `BACKEND_URL`: in Docker/frontend context should resolve to `http://backend:4000`
+
+### Frontend
+- `BACKEND_URL`: target used by the Vite dev proxy when running the frontend outside Docker, usually `http://localhost:4000`
+
+## Validation commands
+
+Check the backend root:
+
+```powershell
 Invoke-RestMethod http://localhost:4000/
 ```
 
-Test login endpoint:
+```bash
+curl http://localhost:4000/
+```
+
+Request a nonce:
 
 ```powershell
 Invoke-RestMethod -Uri http://localhost:4000/api/auth/login -Method POST -ContentType 'application/json' -Body (@{ walletAddress = 'fake_wallet_123' } | ConvertTo-Json)
 ```
 
-If you use the frontend dev server with the proxy, calling `fetch('/api/auth/login')` from the browser will be proxied to the backend.
+```bash
+curl -X POST http://localhost:4000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"walletAddress":"fake_wallet_123"}'
+```
 
----
+## Current limitations
 
-## Environment variables
+- Session tokens are currently stored client-side for MVP simplicity
+- Persona DEK persistence is demo-grade and should be hardened later
+- Survey, assignment, answer, payout, and admin flows are not finished yet
+- The frontend Docker image currently runs the Vite dev server, not a production static build
 
-- `backend/.env` — contains `DATABASE_URL` and `PORT` (used by Docker). Keep credentials out of source control for production.
-- `BACKEND_URL` — used when running the frontend Vite dev server on host so Vite can proxy `/api` to your backend (e.g., `http://localhost:4000`).
-- `BACKEND_CORS_ORIGIN` — optional; set in backend to restrict allowed origins (default allows all during development).
+## Prisma config note
 
----
+This project uses `backend/prisma.config.ts` for Prisma configuration (including seed command), replacing deprecated `package.json#prisma` configuration.
 
-## Frontend production build suggestion
+## Production note
 
-For production, build the frontend and serve static files instead of running Vite in production. Example steps:
+The current Docker setup is optimized for local development. For production, the frontend should be built to static files and served from a proper web server or CDN instead of running the Vite dev server.
+
+Example build:
+
+```powershell
+cd frontend
+npm ci
+npm run build
+```
 
 ```bash
 cd frontend
 npm ci
 npm run build
-# serve the `dist/` with nginx, a CDN, or the backend static server
 ```
 
-If you want a production Docker image, convert `frontend/Dockerfile` to a multi-stage build: install -> build -> copy build output into a small nginx image.
+## Recommended next milestones
 
----
-
-## CI / Batch commands
-
-Below are example batch commands you can use on a CI runner or locally to run the basic pipeline: install, build, Prisma generate, and (optionally) run migrations.
-
-PowerShell (Windows / Azure Pipelines / self-hosted):
-
-```powershell
-# from repo root
-cd backend
-npm ci
-npx prisma generate
-cd ../frontend
-npm ci
-npm run build
-
-# optional: build Docker images (if you push images in CI)
-docker build -t myorg/ledger-polls-backend:latest ./backend
-docker build -t myorg/ledger-polls-frontend:latest ./frontend
-```
-
-Bash (Linux/macOS / GitHub Actions):
-
-```bash
-# backend
-cd backend
-npm ci
-npx prisma generate
-cd ../frontend
-npm ci
-npm run build
-
-# optional: build/push docker images
-docker build -t myorg/ledger-polls-backend:latest ./backend
-docker build -t myorg/ledger-polls-frontend:latest ./frontend
-```
-
-Minimal GitHub Actions example (paste into `.github/workflows/ci.yml`):
-
-```yaml
-name: CI
-on: [push, pull_request]
-jobs:
-	build:
-		runs-on: ubuntu-latest
-		steps:
-			- uses: actions/checkout@v4
-			- name: Use Node.js
-				uses: actions/setup-node@v4
-				with:
-					node-version: '20'
-			- name: Backend - install & prisma
-				working-directory: backend
-				run: |
-					npm ci
-					npx prisma generate
-			- name: Frontend - install & build
-				working-directory: frontend
-				run: |
-					npm ci
-					npm run build
-			# Optional: build docker images and push to registry
-			# - name: Build and push images
-			#   uses: docker/build-push-action@v5
-			#   with:
-			#     push: true
-			#     tags: ghcr.io/${{ github.repository }}:latest
-```
-
----
+1. Stabilize wallet signing and remove temporary debug-only behavior
+2. Align persona encryption and retrieval flow end-to-end
+3. Improve authenticated frontend routing and onboarding state
+4. Add consent handling
+5. Build the first thin survey slice
 
 ## Troubleshooting
 
-- If the frontend can't reach the backend when running locally, ensure `BACKEND_URL` is set for Vite (see "Local development").
-- If Postgres is failing, check `docker-compose logs db` and ensure the named volume isn't corrupted. You can remove `db_data` volume to reset DB (destructive).
+- If the frontend cannot reach the backend in local development, verify `BACKEND_URL` is set correctly before starting Vite.
+- If Welcome analytics are empty, check the audience API directly:
 
----
+```bash
+curl http://localhost:4000/api/public/audience/summary
+```
 
-If you'd like, I can: add the `.github/workflows/ci.yml` file for you, convert the frontend Dockerfile to a multi-stage production build, or add a small `Makefile` / PowerShell helper script that runs the common commands.
+- If analytics return data but UI does not update, restart services:
 
-Happy to continue — tell me which CI or production workflow you'd like me to add next.
+```bash
+docker compose restart backend frontend
+```
+
+- If wallet injection is inconsistent, try a clean browser profile and confirm the wallet extension is enabled for local sites.
+- If the database gets into a bad local state, check the `db` container logs and reset the named volume only if you are fine losing local data.
+
+
+## Day to day commands
+Today:
+
+docker compose down
+Tomorrow:
+
+docker compose up -d
+docker compose ps
+If you changed Dockerfiles or dependencies and want a fresh image rebuild tomorrow, use:
+
+docker compose up -d --build
+Your database data should still be there because it is stored in the named volume. Only use docker compose down -v if you want to delete DB data.

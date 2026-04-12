@@ -1,0 +1,25 @@
+{
+  "name": "caveman",
+  "version": "1.0.0",
+  "description": "Convert natural language into shell commands with POSIX-first logic and PowerShell fallback.",
+  "author": "Pablo",
+  "license": "MIT",
+  "tags": ["cli", "shell", "posix", "powershell", "automation"],
+  "entrypoint": "prompts/system.md",
+  "prompts": {
+    "system": "prompts/system.md",
+    "instructions": "prompts/instructions.md",
+    "examples": "prompts/examples.md"
+  },
+  "capabilities": {
+    "shell_generation": true,
+    "posix": true,
+    "powershell": true,
+    "safe_mode": true
+  },
+  "ui": {
+    "displayName": "Caveman Shell Generator",
+    "icon": "terminal",
+    "category": "Developer Tools"
+  }
+}
